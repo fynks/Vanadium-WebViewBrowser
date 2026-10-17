@@ -112,6 +112,8 @@ jobs:
         uses: actions/upload-artifact@v7.0.2
         with:
           name: Vanadium-WebViewBrowser
-          path: Vanadium-WebViewBrowser-*.zip
+          path: |
+            Vanadium-WebViewBrowser-*.zip
+            Vanadium-WebViewBrowser-*.zip.sha256
           if-no-files-found: error
           retention-days: 90

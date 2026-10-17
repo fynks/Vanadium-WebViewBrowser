@@ -52,6 +52,13 @@ fi
 
 [ -f "$OUT" ] || { echo "!! no zip was produced"; exit 1; }
 
+# checksum next to the zip, so a downloaded file can be verified before it is
+# flashed (sha256sum on Android, or sha256sum -c on a computer)
+if command -v sha256sum >/dev/null 2>&1; then
+    ( cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256" ) &&
+        echo "- checksum: $OUT.sha256"
+fi
+
 echo "- checking the result"
 fail=0
 if command -v unzip >/dev/null 2>&1; then
@@ -66,6 +73,7 @@ fi
 [ "$fail" = "0" ] || exit 1
 
 echo "- done: $OUT"
+[ -f "$OUT.sha256" ] && cat "$OUT.sha256" | sed 's/^/  /' 
 if command -v unzip >/dev/null 2>&1; then
     echo "- size: $(wc -c < "$OUT" | tr -d ' ') bytes, $(unzip -l "$OUT" | tail -1 | awk '{print $2}') entries"
 fi
