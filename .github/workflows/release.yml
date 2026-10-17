@@ -1,0 +1,85 @@
+name: Release
+
+# Builds the ready-to-flash Magisk / KernelSU-Next / APatch module zip.
+#   * push a tag like v1.3.0  -> the zip is attached to a GitHub release
+#   * run it manually         -> the zip is available as a workflow artifact
+# The module zip itself is universal: the installer picks the 32 bit or 64 bit
+# curl helper at runtime, so one file serves every supported device.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.3.0), leave empty to only build an artifact'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build the module zip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Read the module version
+        id: version
+        run: |
+          version=$(sed -n 's/^version=//p' module.prop)
+          code=$(sed -n 's/^versionCode=//p' module.prop)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "module.prop says $version ($code)"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq busybox-static unzip zip
+
+      - name: Build the flashable zip
+        run: |
+          sh tools/build-zip.sh
+          ls -l Vanadium-WebViewBrowser-*.zip
+
+      - name: Verify the zip
+        run: |
+          for f in module.prop customize.sh service.sh action.sh uninstall.sh \
+                   common/dl.sh common/install.sh common/swap.sh \
+                   bin/curl.zip bin/curl64.zip Overlay/WebViewOverlay29.apk \
+                   META-INF/com/google/android/update-binary; do
+            unzip -l Vanadium-WebViewBrowser-*.zip | grep -q " $f\$" || { echo "missing: $f"; exit 1; }
+          done
+          unzip -l Vanadium-WebViewBrowser-*.zip
+
+      - name: Upload the flashable zip as an artifact
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: Vanadium-WebViewBrowser-${{ steps.version.outputs.version }}
+          path: Vanadium-WebViewBrowser-*.zip
+          if-no-files-found: error
+
+      - name: Attach the zip to the release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        uses: softprops/action-gh-release@v3.0.3
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: Vanadium WebView & Browser ${{ steps.version.outputs.version }}
+          files: Vanadium-WebViewBrowser-*.zip
+          generate_release_notes: true
+          draft: false
+          body: |
+            Ready-to-flash module for Magisk, KernelSU Next and APatch.
+
+            **Install**: flash `Vanadium-WebViewBrowser-${{ steps.version.outputs.version }}.zip`,
+            reboot, then pick **Vanadium WebView** in Developer options → WebView implementation.
+
+            **Update later without reflashing**: KernelSU Next users can press the module's
+            **Action** button (or run `su -c sh /data/adb/modules/Vanadium-WebViewBrowser/action.sh`).
+            See the README for details.

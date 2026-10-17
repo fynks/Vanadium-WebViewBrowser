@@ -1,0 +1,117 @@
+name: CI
+
+# Action versions below are the latest confirmed releases at the time of
+# writing (checked through the GitHub API):
+#   actions/checkout            v7.0.1   (2026-07-20)
+#   actions/upload-artifact     v7.0.2   (2026-10-07)
+#   softprops/action-gh-release v3.0.3   (2026-08-30)
+# They avoid the deprecated Node.js 20 runtime that older majors still use.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: ShellCheck the module scripts
+        run: |
+          shellcheck --version
+          shellcheck -s sh -S warning \
+            customize.sh service.sh uninstall.sh action.sh \
+            common/*.sh tools/*.sh
+
+  syntax:
+    name: Android shell syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Parse every script with BusyBox ash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq busybox-static
+          for f in customize.sh service.sh uninstall.sh action.sh common/*.sh tools/*.sh; do
+            echo "checking $f"
+            busybox ash -n "$f"
+          done
+
+  download-engine:
+    name: download engine tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install test dependencies
+        run: |
+          set -x
+          sudo apt-get update -qq || true
+          # unzip and curl are what the suite cannot run without; busybox only
+          # selects which shell the suite uses, wget exercises the fallback
+          # engine when the runner has one
+          sudo apt-get install -y unzip zip busybox-static wget || true
+          missing=""
+          for t in unzip curl; do
+            command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::could not install:$missing"
+            exit 1
+          fi
+          unzip -v | head -n 1 || true
+          busybox | head -n 1 || echo "note: no busybox, the suite will run with sh"
+          wget --version | head -n 1 || echo "note: no wget, the wget engine is tested with a stub"
+      - name: Run the test suite against the local mirror
+        run: |
+          mkdir -p "$RUNNER_TEMP/vwb-logs"
+          VWB_TEST_LOG_DIR="$RUNNER_TEMP/vwb-logs" busybox ash tools/test-downloader.sh
+      - name: Upload the test logs
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: test-logs
+          path: ${{ runner.temp }}/vwb-logs
+          if-no-files-found: ignore
+          retention-days: 14
+
+  module-zip:
+    name: module zip builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq || true
+          sudo apt-get install -y unzip busybox-static zip || true
+          for t in unzip busybox zip; do
+            command -v "$t" >/dev/null 2>&1 || { echo "::error::missing $t"; exit 1; }
+          done
+      - name: Build the flashable module zip
+        run: |
+          sh tools/build-zip.sh
+          ls -l Vanadium-WebViewBrowser-*.zip
+      - name: Check the zip contains everything the installer needs
+        run: |
+          for f in module.prop customize.sh service.sh action.sh uninstall.sh \
+                   common/dl.sh common/install.sh common/swap.sh \
+                   bin/curl.zip bin/curl64.zip Overlay/WebViewOverlay29.apk \
+                   META-INF/com/google/android/update-binary; do
+            unzip -l Vanadium-WebViewBrowser-*.zip | grep -q " $f\$" || { echo "missing: $f"; exit 1; }
+          done
+          unzip -l Vanadium-WebViewBrowser-*.zip
+      - name: Upload the flashable zip
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: Vanadium-WebViewBrowser
+          path: Vanadium-WebViewBrowser-*.zip
+          if-no-files-found: error
+          retention-days: 90
