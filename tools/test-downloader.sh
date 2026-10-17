@@ -55,9 +55,8 @@ fail() {
     printf '  FAIL  %s\n' "$1"
     detail=""
     if [ -n "${2:-}" ] && [ -f "$2" ]; then
-        printf '        last log lines:\n'
-        detail=$(tail -n 6 "$2" | sed 's/^/          /')
-        printf '%s\n' "$detail"
+        printf '        log: %s\n' "$2"
+        detail=$(tail -c 3000 "$2" | sed 's/^/          /')
     fi
     gh_annotate error "${LASTSECTION:-tests}: $1
 $detail"
@@ -205,6 +204,22 @@ export FAKE_PM_LOG="$WORK/logs/pm.log"
 export FAKE_PM_STREAMED="$WORK/logs/streamed.apk"
 export VWB_TMP_STAGE="$WORK/tmp/vanadium-stage"
 
+# Environment report: a CI failure is much easier to read when the log says
+# which download tools (and which capabilities) the machine actually has.
+tool_report=$(sh -c '. "$REPO/common/dl.sh"
+    vwb_init >/dev/null 2>&1
+    printf "unzip=%s mode=%s\n" "${VWB_UNZIP:-none}" "${VWB_UNZIP_MODE:-none}"
+    printf "curl=%s\n" "${VWB_CURL_BIN:-none}"
+    printf "wget=%s\n" "${VWB_WGET:-none}"
+    printf "busybox=%s\n" "${VWB_BUSYBOX:-none}"
+    printf "capath=%s cacert=%s\n" "${VWB_CAPATH:-none}" "${VWB_CACERT:-none}"
+    printf "profiles: doh=%s ares=%s http1=%s\n" "${VWB_PROFILE_DOH:-?}" "${VWB_PROFILE_ARES:-?}" "${VWB_PROFILE_HTTP1:-?}"
+' 2>&1)
+printf '%s\n' "$tool_report" | sed 's/^/  /'
+command -v python3 >/dev/null 2>&1 && printf '  python3=%s\n' "$(python3 -V 2>&1)"
+printf '  shell=%s\n' "$ASH"
+gh_annotate notice "environment: $(printf '%s' "$tool_report" | tr '\n' ' ')"
+
 # run <logname> [extra env assignments...] -- <shell snippet>
 run() {
     name=$1; shift
@@ -264,6 +279,7 @@ section "4. truncated payload is rejected"
 LASTLOG="$WORK/logs/t4.log"
 if VWB_MAX_ATTEMPTS=2 $ASH -c ". \$REPO/common/dl.sh
     vwb_init
+    echo \"DBG unzip=[\$VWB_UNZIP] mode=[\$VWB_UNZIP_MODE] verify=[\$VWB_VERIFY]\"
     vwb_fetch \"\$WORK/t4.apk\" 4096 'test payload' \
         \"http://127.0.0.1:\$PORT/trunc/TrichromeWebView.apk\"" > "$LASTLOG" 2>&1; then
     fail "truncated payload was accepted"
@@ -328,6 +344,8 @@ LASTLOG="$WORK/logs/t8.log"
 if VWB_CURL=none VWB_BUSYBOX_OVERRIDE=/nonexistent FAKE_WGET_SOURCE="$WORK/assets/TrichromeLibrary.apk" \
    $ASH -c ". \$REPO/common/dl.sh
     vwb_init
+    echo \"DBG wget=[\$VWB_WGET] busybox=[\$VWB_BUSYBOX] curl=[\$VWB_CURL_BIN] errfile=[\$VWB_ERRFILE]\"
+    echo \"DBG stub=[$(command -v wget)]\"
     vwb_fetch \"\$WORK/t8.apk\" 4096 'test payload' \
         \"http://127.0.0.1:\$PORT/good/TrichromeLibrary.apk\"" > "$LASTLOG" 2>&1; then
     fail "unverified engine was used without opt-in"

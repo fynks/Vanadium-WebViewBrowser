@@ -79,6 +79,7 @@ vwb_warn() { vwb_log "! $1"; }
 vwb_err()  { vwb_log "!! $1"; }
 
 vwb_size() { # vwb_size <file> -> byte count (0 when missing)
+    [ -f "$1" ] || { echo 0; return 0; }
     s=$(wc -c < "$1" 2>/dev/null | tr -dc '0-9')
     [ -n "$s" ] && echo "$s" || echo 0
 }
@@ -482,8 +483,9 @@ vwb_build_plan() { # vwb_build_plan <phase> <url...>
     phase=$1; shift
     for u in "$@"; do
         case "$phase" in
-            1) echo "curl default $u" ;;
-            2) [ "$VWB_PROFILE_DOH" = "1" ] && echo "curl doh $u"
+            1) [ -n "$VWB_CURL_BIN" ] && echo "curl default $u" ;;
+            2) [ -z "$VWB_CURL_BIN" ] && continue
+               [ "$VWB_PROFILE_DOH" = "1" ] && echo "curl doh $u"
                [ "$VWB_PROFILE_DOH" = "1" ] && echo "curl doh2 $u"
                [ "$VWB_PROFILE_ARES" = "1" ] && echo "curl ares $u"
                [ -n "$VWB_CAPATH" ] && echo "curl capath $u"
