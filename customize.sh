@@ -8,6 +8,16 @@
 #  package manager, overlay).
 ##############################################################################
 
+# The manager (Magisk / KernelSU Next / APatch) defines abort() and ui_print()
+# before sourcing this file. Define harmless fallbacks so a manual run
+# ("sh customize.sh") behaves the same way instead of silently continuing.
+if ! command -v abort >/dev/null 2>&1; then
+    abort() { echo "!! $1"; exit 1; }
+fi
+if ! command -v ui_print >/dev/null 2>&1; then
+    ui_print() { echo "$1"; }
+fi
+
 # --- sanity checks, before anything is written to the device ---------------
 # $API and $ARCH are set by the installer (Magisk's util_functions.sh and
 # KernelSU-Next's installer.sh both use exactly these names); fall back to

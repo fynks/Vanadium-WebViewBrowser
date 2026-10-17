@@ -66,7 +66,7 @@ same overlay), the download and boot paths around it were hardened:
 | Boot safety | — | `service.sh` repairs a half-finished update and removes the rollback copies after a successful boot |
 | Uninstall | WebView implementation could be left pointing at a package that no longer exists | the framework is switched back to a valid provider before the packages are removed |
 | Manager integration | — | KernelSU Next `action.sh` (update button), installed Vanadium version shown in the module description |
-| Verification | manual | `tools/test-downloader.sh` (77 checks) + `shellcheck` + BusyBox-ash syntax checks, all wired into GitHub Actions |
+| Verification | manual | `tools/test-downloader.sh` (86 checks) + `shellcheck` + BusyBox-ash syntax checks, all wired into GitHub Actions |
 
 ### About the bundled curl
 `bin/curl64.zip` / `bin/curl.zip` contain a statically linked curl
@@ -149,15 +149,15 @@ su -c 'VWB_REF=17 VWB_ARCHDIR=arm64-multilib sh /data/adb/modules/Vanadium-WebVi
 ```
 busybox ash -n common/dl.sh                  # syntax check with Android's shell
 shellcheck -s sh -S warning *.sh common/*.sh tools/*.sh
-busybox ash tools/test-downloader.sh         # 77 checks against a local mirror
+busybox ash tools/test-downloader.sh         # 86 checks against a local mirror
 sh tools/build-zip.sh                        # build the flashable module zip
 ```
 `tools/test-downloader.sh` starts `tools/test-server.py` (good mirror, dead
 mirror, captive portal page, truncated payload, stalling connection, archivers
 with and without `-t`/`-l`) and stub `pm`/`getprop`/`dumpsys` binaries, then
-runs the real module code — a full `install.sh` run, the APK swap with rollback,
-the failure paths and `action.sh` end to end — without touching a device. It
-needs `curl`, `unzip` and `python3`.
+runs the real module code — a full `install.sh` run, the `customize.sh` entry
+point, the APK swap with rollback, the failure paths and `action.sh` end to end —
+without touching a device. It needs `curl`, `unzip` and `python3`.
 
 Every push and pull request runs the same checks through
 `.github/workflows/ci.yml` (shellcheck, BusyBox-ash syntax check, the test

@@ -375,7 +375,7 @@ prepare_module() {
     rm -rf "$1"
     mkdir -p "$1/bin" "$1/common" "$1/Overlay" "$1/system" "$1/tools"
     cp "$REPO/common/dl.sh" "$REPO/common/install.sh" "$REPO/common/swap.sh" "$1/common/"
-    cp "$REPO/action.sh" "$REPO/service.sh" "$REPO/uninstall.sh" "$1/"
+    cp "$REPO/action.sh" "$REPO/service.sh" "$REPO/uninstall.sh" "$REPO/customize.sh" "$1/"
     cp "$REPO/module.prop" "$1/module.prop"
     : > "$1/system/.placeholder"
     head -c 2048 /dev/urandom > "$1/Overlay/WebViewOverlay29.apk"
@@ -542,6 +542,39 @@ fi
 check "installed APK untouched after the failed update" \
     cmp -s "$WORK/before_failed_action.apk" "$MP/system/app/VanadiumWebView/VanadiumWebView.apk"
 check_not "no staging leftovers after the failure" test -d "$MP/.stage"
+
+##############################################################################
+section "14. customize.sh entry point"
+MP="$WORK/modpath_custom"
+prepare_module "$MP"
+
+LASTLOG="$WORK/logs/t14a.log"
+if API=28 ARCH=arm64 MODPATH="$MP" $ASH "$MP/customize.sh" > "$LASTLOG" 2>&1; then
+    fail "Android 9 was accepted"
+else
+    pass "install on an unsupported Android version is refused"
+fi
+in_log "Android 10+" "the version requirement is explained"
+check_not "refused run did not install anything" test -d "$MP/system/app"
+
+LASTLOG="$WORK/logs/t14b.log"
+if API=35 ARCH=mips MODPATH="$MP" $ASH "$MP/customize.sh" > "$LASTLOG" 2>&1; then
+    fail "unsupported architecture was accepted"
+else
+    pass "unsupported architecture is refused"
+fi
+in_log "Unsupported CPU architecture" "the architecture is named in the message"
+
+LASTLOG="$WORK/logs/t14c.log"
+installer_env "$MP" "http://127.0.0.1:$PORT/good" "http://127.0.0.1:$PORT/missing" "http://127.0.0.1:$PORT/good2"
+if MODPATH="$MP" $ASH "$MP/customize.sh" > "$LASTLOG" 2>&1; then
+    pass "customize.sh installs on a supported device"
+else
+    fail "customize.sh failed on the happy path" "$LASTLOG"
+fi
+assert_hash "$MP/system/app/VanadiumWebView/VanadiumWebView.apk" "$WORK/assets/TrichromeWebView.sha" "APK placed through customize.sh"
+in_log "WebView implementation" "the follow-up instructions were printed"
+check_not "no staging leftovers" test -d "$MP/.stage"
 
 ##############################################################################
 printf '\n==========================================\n'
