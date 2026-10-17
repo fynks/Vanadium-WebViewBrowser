@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck the module scripts
+        run: |
+          shellcheck --version
+          shellcheck -s sh -S warning \
+            customize.sh service.sh uninstall.sh action.sh \
+            common/*.sh tools/*.sh
+
+  syntax:
+    name: Android shell syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse every script with BusyBox ash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq busybox-static
+          busybox ash --help >/dev/null
+          for f in customize.sh service.sh uninstall.sh action.sh common/*.sh tools/*.sh; do
+            echo "checking $f"
+            busybox ash -n "$f"
+          done
+
+  download-engine:
+    name: download engine tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the test suite against the local mirror
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq busybox-static unzip
+          busybox ash tools/test-downloader.sh
+
+  module-zip:
+    name: module zip builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the flashable zip and check it
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq busybox-static unzip zip
+          sh tools/build-zip.sh /tmp/module.zip
+          unzip -l /tmp/module.zip

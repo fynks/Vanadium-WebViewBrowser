@@ -1,0 +1,9 @@
+# ShellCheck configuration for the module scripts.
+#
+# customize.sh, common/install.sh and common/dl.sh source each other, and the
+# managers (Magisk / KernelSU Next / APatch) inject helper functions such as
+# ui_print and abort at runtime. ShellCheck cannot see any of that, which
+# produces a few false positives:
+disable=SC2317   # unreachable code (return/exit inside sourced files)
+disable=SC2329   # function is never invoked (called from a sourced file)
+disable=SC2034   # variable appears unused (consumed by a sourced file)
