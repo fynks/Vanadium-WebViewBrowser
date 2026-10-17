@@ -85,6 +85,24 @@ fi
 vwb_warn() { vwb_log "! $1"; }
 vwb_err()  { vwb_log "!! $1"; }
 
+vwb_find_in_path() { # vwb_find_in_path <name> -> first executable in $PATH
+    # `command -v` is not reliable across the shells module scripts end up in
+    # (some print a bare name instead of a path, some cache look-ups), so scan
+    # $PATH explicitly. Returns non-zero when nothing is found.
+    _old_ifs=$IFS
+    IFS=:
+    for _d in $PATH; do
+        [ -n "$_d" ] || _d=.
+        if [ -f "$_d/$1" ] && [ -x "$_d/$1" ]; then
+            IFS=$_old_ifs
+            printf '%s\n' "$_d/$1"
+            return 0
+        fi
+    done
+    IFS=$_old_ifs
+    return 1
+}
+
 vwb_cmd_ok() { # is this command string runnable? ("unzip", "busybox unzip", "/x/unzip")
     w=${1%% *}
     [ -n "$w" ] || return 1
@@ -159,7 +177,7 @@ vwb_init() { # vwb_init -> populates VWB_CURL_BIN, VWB_WGET, VWB_UNZIP, ...
         [ -x "$VWB_BUSYBOX_OVERRIDE" ] && VWB_BUSYBOX="$VWB_BUSYBOX_OVERRIDE"
     else
         for c in /data/adb/ksu/bin/busybox /data/adb/magisk/busybox \
-                 /data/adb/ap/bin/busybox $(command -v busybox 2>/dev/null); do
+                 /data/adb/ap/bin/busybox $(vwb_find_in_path busybox); do
             [ -n "$c" ] && [ -x "$c" ] && { VWB_BUSYBOX="$c"; break; }
         done
     fi
@@ -208,7 +226,7 @@ vwb_init() { # vwb_init -> populates VWB_CURL_BIN, VWB_WGET, VWB_UNZIP, ...
     elif [ -n "$VWB_BUSYBOX" ] && "$VWB_BUSYBOX" wget --help >/dev/null 2>&1; then
         VWB_WGET="$VWB_BUSYBOX wget"
     else
-        for c in $(command -v wget 2>/dev/null) /system/bin/wget /system/xbin/wget /vendor/bin/wget; do
+        for c in $(vwb_find_in_path wget) /system/bin/wget /system/xbin/wget /vendor/bin/wget; do
             [ -n "$c" ] && [ -x "$c" ] || continue
             if "$c" --help >/dev/null 2>&1 || "$c" -h >/dev/null 2>&1; then VWB_WGET="$c"; break; fi
         done
@@ -236,7 +254,7 @@ vwb_init() { # vwb_init -> populates VWB_CURL_BIN, VWB_WGET, VWB_UNZIP, ...
     # Android locations, then the busybox applet. A caller supplied archiver
     # is kept as is: silently replacing it with a different one is how the
     # download verification ends up disabled without anybody noticing.
-    unzip_candidates="${VWB_UNZIP_OVERRIDE:-} ${VWB_UNZIP_EXPLICIT:-} $(command -v unzip 2>/dev/null)"
+    unzip_candidates="${VWB_UNZIP_OVERRIDE:-} ${VWB_UNZIP_EXPLICIT:-} $(vwb_find_in_path unzip)"
     unzip_candidates="$unzip_candidates /system/bin/unzip /system/xbin/unzip /system_ext/bin/unzip /vendor/bin/unzip"
     if [ -n "$VWB_BUSYBOX" ] && "$VWB_BUSYBOX" unzip --help >/dev/null 2>&1; then
         unzip_candidates="$unzip_candidates $VWB_BUSYBOX:unzip"

@@ -54,21 +54,22 @@ jobs:
       - name: Install test dependencies
         run: |
           set -x
-          command -v unzip busybox || true
           sudo apt-get update -qq || true
-          sudo apt-get install -y unzip busybox-static zip || true
-          # fail here, with a readable message, instead of producing a
-          # confusing test run without the tools the suite needs
+          # unzip and curl are what the suite cannot run without; busybox only
+          # selects which shell the suite uses, wget exercises the fallback
+          # engine when the runner has one
+          sudo apt-get install -y unzip zip busybox-static wget || true
           missing=""
-          for t in unzip busybox; do
+          for t in unzip curl; do
             command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
           done
           if [ -n "$missing" ]; then
             echo "::error::could not install:$missing"
             exit 1
           fi
-          unzip -v | head -n 1
-          busybox | head -n 1
+          unzip -v | head -n 1 || true
+          busybox | head -n 1 || echo "note: no busybox, the suite will run with sh"
+          wget --version | head -n 1 || echo "note: no wget, the wget engine is tested with a stub"
       - name: Run the test suite against the local mirror
         run: |
           mkdir -p "$RUNNER_TEMP/vwb-logs"

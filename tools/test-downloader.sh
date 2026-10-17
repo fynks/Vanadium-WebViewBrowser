@@ -19,7 +19,17 @@ set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/vwb-test.XXXXXX")
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/vwb-test.XXXXXX" 2>/dev/null)
+if [ -z "$WORK" ] || [ ! -d "$WORK" ]; then
+    echo "!! cannot create a scratch directory (mktemp/TMPDIR problem on this machine)"
+    [ -n "${GITHUB_ACTIONS:-}" ] && printf '::error::test harness cannot create a scratch directory\n'
+    exit 1
+fi
+if [ ! -d "$REPO/common" ]; then
+    echo "!! cannot locate the repository (looked at $REPO)"
+    [ -n "${GITHUB_ACTIONS:-}" ] && printf '::error::test harness cannot locate the repository at %s\n' "$REPO"
+    exit 1
+fi
 PORT=$((20000 + ($$ % 20000)))
 ASH="busybox ash"
 command -v busybox >/dev/null 2>&1 || ASH="sh"
@@ -170,9 +180,22 @@ exit 0
 EOF
 chmod 0755 "$WORK/bin/getprop" "$WORK/bin/dumpsys" "$WORK/bin/pm" "$WORK/bin/wget"
 
+path_scan() { # path_scan <name> -> first executable found in $PATH
+    # same deterministic lookup the module uses; `command -v` is not portable
+    # enough between dash, busybox ash and the CI runner's shells
+    old_ifs=$IFS
+    IFS=:
+    for d in $PATH; do
+        [ -n "$d" ] || d=.
+        if [ -f "$d/$1" ] && [ -x "$d/$1" ]; then IFS=$old_ifs; echo "$d/$1"; return 0; fi
+    done
+    IFS=$old_ifs
+    return 1
+}
+
 find_tool() { # find_tool <name> [extra absolute candidates...]
     tool=$1; shift
-    for c in "$(command -v "$tool" 2>/dev/null)" "$@" "/usr/bin/$tool" "/bin/$tool"; do
+    for c in "$(path_scan "$tool")" "$@" "/usr/bin/$tool" "/bin/$tool"; do
         [ -n "$c" ] || continue
         [ -x "$c" ] && { echo "$c"; return 0; }
     done
@@ -368,11 +391,11 @@ case "$out" in *"good:ACCEPT"*)   pass "valid APK accepted" ;;      *) fail "val
 ##############################################################################
 section "8. unverified engines are locked behind the opt-in marker"
 LASTLOG="$WORK/logs/t8.log"
-if VWB_CURL=none VWB_BUSYBOX_OVERRIDE=/nonexistent FAKE_WGET_SOURCE="$WORK/assets/TrichromeLibrary.apk" \
+if VWB_CURL=none VWB_BUSYBOX_OVERRIDE=/nonexistent VWB_WGET="$WORK/bin/wget" \
+   FAKE_WGET_SOURCE="$WORK/assets/TrichromeLibrary.apk" \
    $ASH -c ". \$REPO/common/dl.sh
     vwb_init
-    echo \"DBG wget=[\$VWB_WGET] busybox=[\$VWB_BUSYBOX] curl=[\$VWB_CURL_BIN] errfile=[\$VWB_ERRFILE]\"
-    echo \"DBG stub=[$(command -v wget)]\"
+    echo \"DBG wget=[\$VWB_WGET] verifies=[\$VWB_WGET_VERIFIES] curl=[\$VWB_CURL_BIN]\"
     vwb_fetch \"\$WORK/t8.apk\" 4096 'test payload' \
         \"http://127.0.0.1:\$PORT/good/TrichromeLibrary.apk\"" > "$LASTLOG" 2>&1; then
     fail "unverified engine was used without opt-in"
@@ -380,10 +403,12 @@ else
     pass "wget that cannot verify TLS is refused"
 fi
 in_log "skipping unverified wget" "the refusal is explained in the log"
+in_log "cannot verify TLS certificates" "the engine was rejected before it was used"
+in_log "DBG wget=\[$WORK/bin/wget\]" "the explicitly given engine was kept"
 check_not "no file accepted" test -f "$WORK/t8.apk"
 
 LASTLOG="$WORK/logs/t8b.log"
-if VWB_CURL=none VWB_BUSYBOX_OVERRIDE=/nonexistent VWB_ALLOW_INSECURE=1 \
+if VWB_CURL=none VWB_BUSYBOX_OVERRIDE=/nonexistent VWB_ALLOW_INSECURE=1 VWB_WGET="$WORK/bin/wget" \
    FAKE_WGET_SOURCE="$WORK/assets/TrichromeLibrary.apk" \
    $ASH -c ". \$REPO/common/dl.sh
     vwb_init
