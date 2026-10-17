@@ -170,8 +170,23 @@ exit 0
 EOF
 chmod 0755 "$WORK/bin/getprop" "$WORK/bin/dumpsys" "$WORK/bin/pm" "$WORK/bin/wget"
 
-REAL_CURL=$(command -v curl) || { echo "curl is required"; exit 1; }
-REAL_UNZIP=$(command -v unzip) || { echo "unzip is required"; exit 1; }
+find_tool() { # find_tool <name> [extra absolute candidates...]
+    tool=$1; shift
+    for c in "$(command -v "$tool" 2>/dev/null)" "$@" "/usr/bin/$tool" "/bin/$tool"; do
+        [ -n "$c" ] || continue
+        [ -x "$c" ] && { echo "$c"; return 0; }
+    done
+    return 1
+}
+
+REAL_CURL=$(find_tool curl) || { echo "!! curl is required for the tests"; exit 1; }
+REAL_UNZIP=$(find_tool unzip) || {
+    # the module itself copes without unzip (size + header checks only), but
+    # the verification tests cannot, so refuse to run a misleading suite
+    echo "!! unzip is required for the tests (apt-get install unzip)"
+    gh_annotate error "unzip is missing on this machine - install it before running the test suite"
+    exit 1
+}
 printf '  engines: %s , %s\n' "$REAL_CURL" "$REAL_UNZIP"
 
 python3 "$HERE/test-server.py" "$PORT" "$WORK/assets" > "$WORK/logs/server.log" 2>&1 &
@@ -218,6 +233,7 @@ tool_report=$(sh -c '. "$REPO/common/dl.sh"
 printf '%s\n' "$tool_report" | sed 's/^/  /'
 command -v python3 >/dev/null 2>&1 && printf '  python3=%s\n' "$(python3 -V 2>&1)"
 printf '  shell=%s\n' "$ASH"
+printf '  path=%s\n' "$PATH"
 gh_annotate notice "environment: $(printf '%s' "$tool_report" | tr '\n' ' ')"
 
 # run <logname> [extra env assignments...] -- <shell snippet>
@@ -473,7 +489,11 @@ check_not "Overlay source directory cleaned up" test -d "$MP/Overlay"
 check_not "tools directory does not ship into the module" test -d "$MP/tools"
 check_not "staging directory removed" test -d "$MP/.stage"
 check_not "no leftovers in the fallback temp dir" test -d "$VWB_TMP_STAGE"
-in_log "cannot run on this device" "unusable bundled curl handled gracefully"
+if grep -qE "cannot run on this device|no unzip available, cannot extract" "$LASTLOG"; then
+    pass "unusable bundled curl handled gracefully"
+else
+    fail "the installer did not report the unusable bundled curl" "$LASTLOG"
+fi
 check "build info recorded in module.prop" grep -q "99.1.2.3" "$MP/module.prop"
 if [ "$(grep -c '^pm install' "$WORK/logs/pm.log" 2>/dev/null)" = "3" ]; then
     pass "package manager called for all three APKs"
