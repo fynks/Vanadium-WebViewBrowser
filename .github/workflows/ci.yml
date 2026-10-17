@@ -1,16 +1,30 @@
 name: CI
 
+# Action versions below are the latest confirmed releases at the time of
+# writing (checked through the GitHub API):
+#   actions/checkout            v7.0.1   (2026-07-20)
+#   actions/upload-artifact     v7.0.2   (2026-10-07)
+#   softprops/action-gh-release v3.0.3   (2026-08-30)
+# They avoid the deprecated Node.js 20 runtime that older majors still use.
+
 on:
   push:
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:
     name: shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: ShellCheck the module scripts
         run: |
           shellcheck --version
@@ -22,12 +36,11 @@ jobs:
     name: Android shell syntax
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Parse every script with BusyBox ash
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq busybox-static
-          busybox ash --help >/dev/null
           for f in customize.sh service.sh uninstall.sh action.sh common/*.sh tools/*.sh; do
             echo "checking $f"
             busybox ash -n "$f"
@@ -37,21 +50,50 @@ jobs:
     name: download engine tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Run the test suite against the local mirror
+      - uses: actions/checkout@v7.0.1
+      - name: Install test dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq busybox-static unzip
-          busybox ash tools/test-downloader.sh
+      - name: Run the test suite against the local mirror
+        run: |
+          mkdir -p "$RUNNER_TEMP/vwb-logs"
+          VWB_TEST_LOG_DIR="$RUNNER_TEMP/vwb-logs" busybox ash tools/test-downloader.sh
+      - name: Upload the test logs
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: test-logs
+          path: ${{ runner.temp }}/vwb-logs
+          if-no-files-found: ignore
+          retention-days: 14
 
   module-zip:
     name: module zip builds
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Build the flashable zip and check it
+      - uses: actions/checkout@v7.0.1
+      - name: Install build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq busybox-static unzip zip
-          sh tools/build-zip.sh /tmp/module.zip
-          unzip -l /tmp/module.zip
+      - name: Build the flashable module zip
+        run: |
+          sh tools/build-zip.sh
+          ls -l Vanadium-WebViewBrowser-*.zip
+      - name: Check the zip contains everything the installer needs
+        run: |
+          for f in module.prop customize.sh service.sh action.sh uninstall.sh \
+                   common/dl.sh common/install.sh common/swap.sh \
+                   bin/curl.zip bin/curl64.zip Overlay/WebViewOverlay29.apk \
+                   META-INF/com/google/android/update-binary; do
+            unzip -l Vanadium-WebViewBrowser-*.zip | grep -q " $f\$" || { echo "missing: $f"; exit 1; }
+          done
+          unzip -l Vanadium-WebViewBrowser-*.zip
+      - name: Upload the flashable zip
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: Vanadium-WebViewBrowser
+          path: Vanadium-WebViewBrowser-*.zip
+          if-no-files-found: error
+          retention-days: 90

@@ -28,6 +28,7 @@ PASSED=0
 FAILED=0
 SERVER_PID=""
 LASTLOG=""
+LASTSECTION="setup"
 
 cleanup() {
     [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
@@ -36,12 +37,32 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 pass() { PASSED=$((PASSED + 1)); printf '  PASS  %s\n' "$1"; }
+# (gh_annotate is defined further down; this placeholder keeps early failures
+#  from breaking on shells without the real helper yet)
+
+# GitHub understands lines of the form ::error::message ; encoding the newlines
+# keeps the whole message (check name, section, log tail) in one annotation.
+gh_annotate() { # gh_annotate <error|warning|notice> <message>
+    [ -n "${GITHUB_ACTIONS:-}" ] || return 0
+    kind=$1
+    msg=$(printf '%s' "$2" | tr -d '\r' | sed -e 's/%/%25/g' \
+          | awk 'BEGIN{ORS=""} {gsub(/\n/,"%0A"); print (NR>1 ? "%0A" : "") $0} END{print ""}')
+    printf '::%s::%s\n' "$kind" "$msg"
+}
+
 fail() {
     FAILED=$((FAILED + 1))
     printf '  FAIL  %s\n' "$1"
-    [ -n "${2:-}" ] && [ -f "$2" ] && printf '        last log lines:\n' && tail -n 4 "$2" | sed 's/^/          /'
+    detail=""
+    if [ -n "${2:-}" ] && [ -f "$2" ]; then
+        printf '        last log lines:\n'
+        detail=$(tail -n 6 "$2" | sed 's/^/          /')
+        printf '%s\n' "$detail"
+    fi
+    gh_annotate error "${LASTSECTION:-tests}: $1
+$detail"
 }
-section() { printf '\n== %s\n' "$1"; }
+section() { LASTSECTION="$1"; printf '\n== %s\n' "$1"; }
 ok()   { pass "$1"; }
 nok()  { fail "$1" "${2:-}"; }
 
@@ -154,13 +175,21 @@ REAL_CURL=$(command -v curl) || { echo "curl is required"; exit 1; }
 REAL_UNZIP=$(command -v unzip) || { echo "unzip is required"; exit 1; }
 printf '  engines: %s , %s\n' "$REAL_CURL" "$REAL_UNZIP"
 
-python3 "$HERE/test-server.py" "$PORT" "$WORK/assets" &
+python3 "$HERE/test-server.py" "$PORT" "$WORK/assets" > "$WORK/logs/server.log" 2>&1 &
 SERVER_PID=$!
+ready=0
 i=0
 while [ "$i" -lt 50 ]; do
-    "$REAL_CURL" -s -o /dev/null "http://127.0.0.1:$PORT/missing/ping" && break
+    if "$REAL_CURL" -s -o /dev/null "http://127.0.0.1:$PORT/missing/ping"; then ready=1; break; fi
+    kill -0 "$SERVER_PID" 2>/dev/null || break
     sleep 0.2; i=$((i + 1))
 done
+if [ "$ready" != "1" ]; then
+    echo "!! the local test mirror did not start on port $PORT"
+    cat "$WORK/logs/server.log" 2>/dev/null
+    gh_annotate error "test mirror failed to start on port $PORT (python3/socket problem on this machine)"
+    exit 1
+fi
 printf '  mirror on http://127.0.0.1:%s\n' "$PORT"
 
 # environment shared by every case: fast timeouts, the host curl/unzip, http
@@ -580,5 +609,17 @@ check_not "no staging leftovers" test -d "$MP/.stage"
 printf '\n==========================================\n'
 printf ' passed: %s   failed: %s\n' "$PASSED" "$FAILED"
 printf '==========================================\n'
-[ "$FAILED" = "0" ] || exit 1
+
+# keep every log for CI (uploaded as an artifact) and for local debugging
+if [ -n "${VWB_TEST_LOG_DIR:-}" ]; then
+    mkdir -p "$VWB_TEST_LOG_DIR" 2>/dev/null
+    cp "$WORK/logs/"* "$VWB_TEST_LOG_DIR/" 2>/dev/null
+    printf 'passed=%s failed=%s\n' "$PASSED" "$FAILED" > "$VWB_TEST_LOG_DIR/summary.txt"
+fi
+
+if [ "$FAILED" != "0" ]; then
+    gh_annotate error "download engine tests: $FAILED of $((PASSED + FAILED)) checks failed (see the log above)"
+    exit 1
+fi
+gh_annotate notice "download engine tests: all $PASSED checks passed"
 exit 0
