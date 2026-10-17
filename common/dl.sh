@@ -37,6 +37,13 @@
 VWB_VERSION="1.3.0"
 VWB_INSECURE_MARKER="/data/adb/vanadium-webview-allow-insecure-download"
 
+# Remember what the caller supplied (environment, action.sh, the test suite)
+# before any discovery overwrites the variables. Explicitly provided tools are
+# always preferred and are never silently replaced by a different one.
+VWB_CURL_EXPLICIT="${VWB_CURL:-}"
+VWB_WGET_EXPLICIT="${VWB_WGET:-}"
+VWB_UNZIP_EXPLICIT="${VWB_UNZIP:-}"
+
 # tunables (override *before* sourcing this file if you need to)
 : "${VWB_CONNECT_TIMEOUT:=20}"     # seconds to establish the connection
 : "${VWB_CURL_RETRY:=3}"           # curl's internal retries per attempt
@@ -77,6 +84,17 @@ else
 fi
 vwb_warn() { vwb_log "! $1"; }
 vwb_err()  { vwb_log "!! $1"; }
+
+vwb_cmd_ok() { # is this command string runnable? ("unzip", "busybox unzip", "/x/unzip")
+    w=${1%% *}
+    [ -n "$w" ] || return 1
+    if [ -x "$w" ]; then return 0; fi
+    command -v "$w" >/dev/null 2>&1
+}
+
+vwb_dir_in_path() { # is <dir> already part of $PATH?
+    case ":$PATH:" in *":$1:"*) return 0 ;; *) return 1 ;; esac
+}
 
 vwb_size() { # vwb_size <file> -> byte count (0 when missing)
     [ -f "$1" ] || { echo 0; return 0; }
@@ -123,6 +141,17 @@ vwb_rc_hint() { # curl exit code -> what to try next (helps users and support)
 vwb_init() { # vwb_init -> populates VWB_CURL_BIN, VWB_WGET, VWB_UNZIP, ...
     vwb_log "- Preparing download engine (helper v$VWB_VERSION)"
 
+    # Module scripts can run with a very small $PATH (init, the manager's own
+    # environment, a manual su -c ...). Append the standard Android locations
+    # so getprop/pm/dumpsys/toybox and the KernelSU/Magisk helpers are found.
+    for d in /system/bin /system/xbin /system_ext/bin /vendor/bin \
+             /data/adb/ksu/bin /data/adb/magisk /data/adb/ap/bin \
+             /data/adb/modules/busybox-ndk/system/bin; do
+        [ -d "$d" ] || continue
+        vwb_dir_in_path "$d" || PATH="$PATH:$d"
+    done
+    export PATH
+
     # --- busybox (applet multiplexer used by both Magisk and KernelSU Next) ---
     VWB_BUSYBOX=""
     if [ -n "${VWB_BUSYBOX_OVERRIDE:-}" ]; then
@@ -138,13 +167,14 @@ vwb_init() { # vwb_init -> populates VWB_CURL_BIN, VWB_WGET, VWB_UNZIP, ...
     # --- curl: bundled static build first (self-contained, verifies TLS) -----
     # bin/curl.local lets a user drop in a newer static curl without rebuilding
     # the module; bin/curl is the one shipped inside curl.zip / curl64.zip.
+    # An explicitly provided VWB_CURL is always preferred over discovery.
     VWB_CURL_BIN=""
     no_curl=""
-    case "${VWB_CURL:-}" in
+    case "${VWB_CURL_EXPLICIT:-}" in
         none|NONE|0|-|false) no_curl=1 ;;   # VWB_CURL=none forces the wget path
     esac
     candidates=""
-    [ -n "${VWB_CURL:-}" ] && [ "$no_curl" != "1" ] && candidates="$VWB_CURL"
+    [ -n "$VWB_CURL_EXPLICIT" ] && [ "$no_curl" != "1" ] && candidates="$VWB_CURL_EXPLICIT"
     if [ -n "${MODPATH:-}" ]; then
         candidates="$candidates $MODPATH/bin/curl.local $MODPATH/bin/curl"
     fi
@@ -170,26 +200,54 @@ vwb_init() { # vwb_init -> populates VWB_CURL_BIN, VWB_WGET, VWB_UNZIP, ...
         vwb_warn "no usable curl binary found, falling back to wget"
     fi
 
-    # --- wget fallback (busybox/toybox). Kept as a command string on purpose --
+    # --- wget fallback (busybox or a system wget). A command string on purpose,
+    # like "busybox wget", because $VWB_WGET gets word split when it is used.
     VWB_WGET=""
-    if [ -n "$VWB_BUSYBOX" ] && "$VWB_BUSYBOX" wget --help >/dev/null 2>&1; then
+    if [ -n "${VWB_WGET_EXPLICIT:-}" ] && vwb_cmd_ok "$VWB_WGET_EXPLICIT"; then
+        VWB_WGET="$VWB_WGET_EXPLICIT"
+    elif [ -n "$VWB_BUSYBOX" ] && "$VWB_BUSYBOX" wget --help >/dev/null 2>&1; then
         VWB_WGET="$VWB_BUSYBOX wget"
-    elif command -v wget >/dev/null 2>&1; then
-        if wget --help >/dev/null 2>&1 || wget -h >/dev/null 2>&1; then
-            VWB_WGET="wget"
-        fi
+    else
+        for c in $(command -v wget 2>/dev/null) /system/bin/wget /system/xbin/wget /vendor/bin/wget; do
+            [ -n "$c" ] && [ -x "$c" ] || continue
+            if "$c" --help >/dev/null 2>&1 || "$c" -h >/dev/null 2>&1; then VWB_WGET="$c"; break; fi
+        done
+    fi
+    # Does this wget really check certificates? BusyBox's does (and reports it
+    # when it cannot), GNU wget does not unless given a CA file it can use, so
+    # it must stay behind the opt-in gate.
+    VWB_WGET_VERIFIES=0
+    if [ -n "$VWB_WGET" ]; then
+        case "$VWB_WGET" in
+            *busybox*|*BusyBox*) VWB_WGET_VERIFIES=1 ;;
+            *)
+                wver=$($VWB_WGET --version 2>&1 | head -n 1)
+                case "$wver" in
+                    *BusyBox*|*busybox*) VWB_WGET_VERIFIES=1 ;;
+                    *) VWB_WGET_VERIFIES=0 ;;
+                esac
+                ;;
+        esac
+        [ "$VWB_WGET_VERIFIES" = "1" ] || vwb_warn "the wget on this system cannot verify TLS certificates"
     fi
 
     # --- unzip (for extracting the bundled curl and verifying downloads) -----
-    VWB_UNZIP=""
-    for c in ${VWB_UNZIP_OVERRIDE:-} $(command -v unzip 2>/dev/null); do
-        [ -n "$c" ] && [ -x "$c" ] && { VWB_UNZIP="$c"; break; }
-    done
-    if [ -z "$VWB_UNZIP" ] && [ -n "$VWB_BUSYBOX" ]; then
-        if "$VWB_BUSYBOX" unzip --help >/dev/null 2>&1; then
-            VWB_UNZIP="$VWB_BUSYBOX unzip"
-        fi
+    # Order: the test hook, a caller supplied archiver, $PATH, the usual
+    # Android locations, then the busybox applet. A caller supplied archiver
+    # is kept as is: silently replacing it with a different one is how the
+    # download verification ends up disabled without anybody noticing.
+    unzip_candidates="${VWB_UNZIP_OVERRIDE:-} ${VWB_UNZIP_EXPLICIT:-} $(command -v unzip 2>/dev/null)"
+    unzip_candidates="$unzip_candidates /system/bin/unzip /system/xbin/unzip /system_ext/bin/unzip /vendor/bin/unzip"
+    if [ -n "$VWB_BUSYBOX" ] && "$VWB_BUSYBOX" unzip --help >/dev/null 2>&1; then
+        unzip_candidates="$unzip_candidates $VWB_BUSYBOX:unzip"
     fi
+    VWB_UNZIP=""
+    for c in $unzip_candidates; do
+        case "$c" in
+            *:unzip) applet=${c%%:*} ; vwb_cmd_ok "$applet" && { VWB_UNZIP="$applet unzip"; break; } ;;
+            *)       [ -x "$c" ] && { VWB_UNZIP="$c"; break; } ;;
+        esac
+    done
 
     VWB_CACERT=""
     for c in ${VWB_CACERT:-} /system/etc/security/cacert.pem /system/etc/cacerts.pem; do
@@ -407,6 +465,13 @@ vwb_alive() {
 vwb_wget_try() { # vwb_wget_try <secure|insecure> <dest> <url> <min_bytes> <label>
     mode=$1; dest=$2; url=$3; min=$4; label=$5
     [ -n "$VWB_WGET" ] || return 1
+
+    # The gate first: an engine that cannot check certificates must never be
+    # used for a verified download, no matter how it fails later.
+    if [ "$mode" = "secure" ] && [ "$VWB_WGET_VERIFIES" != "1" ]; then
+        vwb_warn "this wget cannot verify TLS certificates"
+        return 3
+    fi
 
     part="$dest.part"
     rm -f "$part"                     # this engine has no resume support here

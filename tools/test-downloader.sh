@@ -236,6 +236,17 @@ printf '  shell=%s\n' "$ASH"
 printf '  path=%s\n' "$PATH"
 gh_annotate notice "environment: $(printf '%s' "$tool_report" | tr '\n' ' ')"
 
+# The module must keep a caller supplied tool instead of replacing it with
+# whatever its own discovery finds (that bug silently disabled the download
+# verification and made CI fail on three checks for the wrong reason), so make
+# sure the exports really arrive in the test shells.
+seen=$($ASH -c 'printf "%s|%s" "${VWB_UNZIP:-}" "${VWB_CURL:-}"')
+if [ "$seen" = "$REAL_UNZIP|$REAL_CURL" ]; then
+    pass "tool paths are exported to the test shells"
+else
+    fail "tool paths did not reach the test shells (got: $seen)"
+fi
+
 # run <logname> [extra env assignments...] -- <shell snippet>
 run() {
     name=$1; shift
@@ -431,6 +442,39 @@ else
 fi
 check "archiver capability detected as none" grep -q "MODE=none" "$LASTLOG"
 assert_hash "$WORK/t8d.apk" "$WORK/assets/TrichromeWebView.sha" "size and header checks were enough"
+
+##############################################################################
+section "8c. minimal PATH (init/ksud style) with explicitly provided tools"
+mkdir -p "$WORK/minbin"
+for t in sh bash busybox awk sed grep tr wc head tail cat cp mv rm chmod mkdir \
+         sleep kill df date sort uniq env ln; do
+    p=$(command -v "$t" 2>/dev/null)
+    [ -n "$p" ] && ln -sf "$p" "$WORK/minbin/$t"
+done
+LASTLOG="$WORK/logs/t8e.log"
+if PATH="$WORK/minbin" VWB_UNZIP="$REAL_UNZIP" VWB_CURL="$REAL_CURL" $ASH -c ". \$REPO/common/dl.sh
+    vwb_init
+    echo \"DBG unzip=[\$VWB_UNZIP] mode=[\$VWB_UNZIP_MODE]\"
+    vwb_fetch \"\$WORK/t8e.apk\" 4096 'test payload' \
+        \"http://127.0.0.1:\$PORT/good/TrichromeWebView.apk\"" > "$LASTLOG" 2>&1; then
+    pass "download works with a minimal PATH"
+else
+    fail "minimal PATH broke the download" "$LASTLOG"
+fi
+in_log "DBG unzip=\[$REAL_UNZIP\] mode=\[full\]" "the given archiver was kept, not replaced"
+assert_hash "$WORK/t8e.apk" "$WORK/assets/TrichromeWebView.sha" "payload downloaded and verified"
+
+LASTLOG="$WORK/logs/t8f.log"
+if PATH="$WORK/minbin" VWB_UNZIP="$REAL_UNZIP" VWB_CURL="$REAL_CURL" VWB_MAX_ATTEMPTS=2 $ASH -c ". \$REPO/common/dl.sh
+    vwb_init
+    vwb_fetch \"\$WORK/t8f.apk\" 4096 'test payload' \
+        \"http://127.0.0.1:\$PORT/trunc/TrichromeWebView.apk\"" > "$LASTLOG" 2>&1; then
+    fail "truncated payload was accepted with a minimal PATH"
+else
+    pass "truncated payload rejected with a minimal PATH"
+fi
+in_log "ZIP integrity test failed" "the CRC check ran in the minimal environment"
+check_not "nothing was promoted" test -f "$WORK/t8f.apk"
 
 ##############################################################################
 # the complete installer, with fake APKs served by the local mirror

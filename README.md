@@ -65,6 +65,7 @@ same overlay), the download and boot paths around it were hardened:
 | Package install | 400 MB copied to `/data/local/tmp` and never removed | streaming install (`pm install -S`), copy fallback, staging always cleaned |
 | Boot safety | — | `service.sh` repairs a half-finished update and removes the rollback copies after a successful boot |
 | Uninstall | WebView implementation could be left pointing at a package that no longer exists | the framework is switched back to a valid provider before the packages are removed |
+| Tool selection | a caller supplied `curl`/`unzip`/`wget` was silently replaced by whatever discovery found (which could disable verification entirely) | explicitly provided tools are honoured, the archiver is capability probed, and `$PATH` is completed with the standard Android locations |
 | Manager integration | — | KernelSU Next `action.sh` (update button), installed Vanadium version shown in the module description |
 | Verification | manual | `tools/test-downloader.sh` (86 checks) + `shellcheck` + BusyBox-ash syntax checks, all wired into GitHub Actions |
 
@@ -128,6 +129,8 @@ Environment variables understood by the installer and by `action.sh`:
 | `VWB_ARCHDIR` | `arm64-multilib` / `arm-multilib` | prebuilt directory (all three files always come from one directory) |
 | `VWB_RAW_BASE`, `VWB_BLOB_BASE`, `VWB_API_BASE` | GitLab endpoints | mirrors; must all serve the same branch |
 | `VWB_CURL` | auto | curl binary to use; `none` forces the wget path |
+| `VWB_UNZIP` | auto | archiver used for verification/extraction (`unzip` or `busybox unzip`); an explicitly given one is always kept |
+| `VWB_WGET` | auto | wget command for the fallback engine (a system wget that cannot verify TLS stays behind the opt-in gate) |
 | `VWB_CAPATH`, `VWB_CACERT` | auto-detected | CA directory/file for curl or wget |
 | `VWB_DOH_URL`, `VWB_DOH_URL2` | `https://1.1.1.1/dns-query`, `https://8.8.8.8/dns-query` | DNS-over-HTTPS endpoints |
 | `VWB_NS_SERVERS` | `1.1.1.1,1.0.0.1` | DNS servers for the c-ares profile |
@@ -138,6 +141,11 @@ Environment variables understood by the installer and by `action.sh`:
 | `VWB_VERIFY` | `full` | `full` = `unzip -t` (CRC) check, `quick` = header/central directory only |
 | `VWB_ALLOW_INSECURE` | unset | set to `1` for the same opt-in as the marker file |
 | `VWB_TMP_STAGE` | `/data/local/tmp/vanadium-stage` | where the copy-fallback staging happens |
+
+The scripts also work with a minimal `$PATH` (init / `ksud` style): the usual
+Android locations (`/system/bin`, `/data/adb/ksu/bin`, …) are appended
+automatically, and tools given explicitly through the variables above are
+always preferred over anything the discovery would pick.
 
 Example: install a different GrapheneOS branch without editing any file
 
